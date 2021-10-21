@@ -1,0 +1,514 @@
+Parameters:
+  VpcIdParameter:
+    Type: AWS::EC2::VPC::Id
+    Description: "The id of the Vpc into which the EC2 ImageBuilder will be deployed"
+    ConstraintDescription: "Must be a valid AWS VPC Id"
+  SubnetIdParameter:
+    Type: AWS::EC2::Subnet::Id
+    Description: "The id of the subnet in the Vpc into which the EC2 ImageBuilder will be deployed"
+    ConstraintDescription: "Must be a valid AWS VPC Subnet Id"
+  AmiPublishingRegionsParameter:
+    Type: CommaDelimitedList
+    Description: "Comma delimited list of the AWS regions to which the AMI should be published"
+  AmiPublishingTargetIdsParameter:
+    Type: String
+    Description: "Comma delimited list of the AWS account ids to which the AMI should be published"
+  AmiSharingAccountIdsParameter:
+    Type: String
+    Description: "Comma delimited list of the AWS account ids with whom to share the AMI"
+Resources:
+  AmiShareKmsKey:
+    Type: 'AWS::KMS::Key'
+    Properties:
+      KeyPolicy:
+        Statement:
+          - Action: 'kms:*'
+            Effect: Allow
+            Principal:
+              AWS:
+                'Fn::Join':
+                  - ''
+                  - - 'arn:'
+                    - Ref: 'AWS::Partition'
+                    - ':iam::'
+                    - Ref: 'AWS::AccountId'
+                    - ':root'
+            Resource: '*'
+          - Action:
+              - 'kms:Create*'
+              - 'kms:Describe*'
+              - 'kms:Enable*'
+              - 'kms:List*'
+              - 'kms:Put*'
+              - 'kms:Update*'
+              - 'kms:Revoke*'
+              - 'kms:Disable*'
+              - 'kms:Get*'
+              - 'kms:Delete*'
+              - 'kms:TagResource'
+              - 'kms:UntagResource'
+              - 'kms:ScheduleKeyDeletion'
+              - 'kms:CancelKeyDeletion'
+            Effect: Allow
+            Principal:
+              AWS:
+                'Fn::Join':
+                  - ''
+                  - - 'arn:'
+                    - Ref: 'AWS::Partition'
+                    - ':iam::'
+                    - Ref: 'AWS::AccountId'
+                    - ':root'
+            Resource: '*'
+          - Action:
+              - 'kms:Decrypt'
+              - 'kms:Encrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+            Effect: Allow
+            Principal:
+              Service:
+                'Fn::Join':
+                  - ''
+                  - - imagebuilder.
+                    - Ref: 'AWS::URLSuffix'
+            Resource: '*'
+          - Action:
+              - 'kms:Decrypt'
+              - 'kms:Encrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+            Effect: Allow
+            Principal:
+              Service:
+                'Fn::Join':
+                  - ''
+                  - - sns.
+                    - Ref: 'AWS::URLSuffix'
+            Resource: '*'
+        Version: '2012-10-17'
+      Description: KMS key used with EC2 Imagebuilder Ami Share project
+      Enabled: true
+      EnableKeyRotation: true
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+  AmiShareKmsKeyAlias:
+    Type: 'AWS::KMS::Alias'
+    Properties:
+      AliasName: alias/AmiShareKmsKeyAlias
+      TargetKeyId:
+        'Fn::GetAtt':
+          - AmiShareKmsKey
+          - Arn
+  AmiShareImageRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+        - 'Fn::Join':
+            - ''
+            - - 'arn:'
+              - Ref: 'AWS::Partition'
+              - ':iam::aws:policy/AmazonSSMManagedInstanceCore'
+        - 'Fn::Join':
+            - ''
+            - - 'arn:'
+              - Ref: 'AWS::Partition'
+              - ':iam::aws:policy/EC2InstanceProfileForImageBuilder'
+  AmiShareImageRoleDefaultPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - 'kms:Decrypt'
+              - 'kms:Encrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+            Effect: Allow
+            Resource:
+              'Fn::GetAtt':
+                - AmiShareKmsKey
+                - Arn
+          - Action: 'kms:Describe*'
+            Effect: Allow
+            Resource:
+              'Fn::GetAtt':
+                - AmiShareKmsKey
+                - Arn
+          - Action:
+              - 'logs:CreateLogStream'
+              - 'logs:CreateLogGroup'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource:
+              'Fn::Join':
+                - ''
+                - - 'arn:'
+                  - Ref: 'AWS::Partition'
+                  - ':logs:'
+                  - Ref: 'AWS::Region'
+                  - ':'
+                  - Ref: 'AWS::AccountId'
+                  - ':log-group/aws/imagebuilder/*'
+          - Action: 'sns:Publish'
+            Effect: Allow
+            Resource:
+              Ref: AmiShareDistributionTopic
+        Version: '2012-10-17'
+      PolicyName: AmiShareImageRoleDefaultPolicy
+      Roles:
+        - Ref: AmiShareImageRole
+  AmiShareImageBuilderInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles:
+        - Ref: AmiShareImageRole
+      InstanceProfileName: ami-share-imagebuilder-instance-profile
+  AmiShareDistributionList:
+    Type: 'AWS::SSM::Parameter'
+    Properties:
+      Type: StringList
+      Value: 'account1,account2'
+      Name: /master-AmiSharePipeline/DistributionList
+  AmiShareDistributionTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      KmsMasterKeyId:
+        'Fn::GetAtt':
+          - AmiShareKmsKey
+          - Arn
+      TopicName: ami-share-imagebuilder-topic
+  AmiShareImageBuilderSubscription:
+    Type: 'AWS::SNS::Subscription'
+    Properties:
+      Protocol: email
+      TopicArn:
+        Ref: AmiShareDistributionTopic
+      Endpoint: email@domian.com
+  AmiShareImageBuilderSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: >-
+        Security group for the EC2 Image Builder Pipeline:
+        EC2ImageBuilderAmiShare-Pipeline
+      GroupName: ami-share-imagebuilder-sg
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic by default
+          IpProtocol: '-1'
+      VpcId:
+        Ref: VpcIdParameter
+  AmiShareInfrastructureConfig:
+    Type: 'AWS::ImageBuilder::InfrastructureConfiguration'
+    Properties:
+      InstanceProfileName: ami-share-imagebuilder-instance-profile
+      Name: ami-share-infra-config
+      InstanceTypes:
+        - t2.medium
+      ResourceTags:
+        project: ec2-imagebuilder-ami-share
+      SecurityGroupIds:
+        - 'Fn::GetAtt':
+            - AmiShareImageBuilderSecurityGroup
+            - GroupId
+      SnsTopicArn:
+        Ref: AmiShareDistributionTopic
+      SubnetId:
+        Ref: SubnetIdParameter
+      TerminateInstanceOnFailure: true
+    DependsOn:
+      - AmiShareImageBuilderInstanceProfile
+  AmiShareImageRecipie:
+    Type: 'AWS::ImageBuilder::ImageRecipe'
+    Properties:
+      Components:
+        - ComponentArn:
+            'Fn::Join':
+              - ''
+              - - 'arn:'
+                - Ref: 'AWS::Partition'
+                - ':imagebuilder:'
+                - Ref: 'AWS::Region'
+                - ':aws:component/aws-cli-version-2-linux/x.x.x'
+      Name: ami-share-image-recipe
+      ParentImage: 
+        'Fn::Join':
+          - ''
+          - - 'arn:'
+            - Ref: 'AWS::Partition'
+            - ':imagebuilder:'
+            - Ref: 'AWS::Region'
+            - ':aws:image/amazon-linux-2-x86/2021.4.29'
+      Version: 1.0.0
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            DeleteOnTermination: true
+            Encrypted: false
+            VolumeSize: 8
+            VolumeType: gp2
+      Description: Recipe to build and validate AmiShareImageRecipe
+      Tags:
+        project: ec2-imagebuilder-ami-share
+      WorkingDirectory: /imagebuilder
+  AmiShareDistributionConfig:
+    Type: 'AWS::ImageBuilder::DistributionConfiguration'
+    Properties:
+      Distributions:
+        - AmiDistributionConfiguration:
+            Name:
+              'Fn::Sub': 'AmiShare-ImageRecipe-{{ imagebuilder:buildDate }}'
+            AmiTags:
+              project: ec2-imagebuilder-ami-share
+              Pipeline: AmiSharePipeline
+          Region: 
+            Ref: AWS::Region
+      Name: ami-share-distribution-config
+  AmiSharePipeline:
+    Type: 'AWS::ImageBuilder::ImagePipeline'
+    Properties:
+      InfrastructureConfigurationArn:
+        'Fn::GetAtt':
+          - AmiShareInfrastructureConfig
+          - Arn
+      Name: ami-share-pipeline
+      Description: 'Image Pipeline for: AmiSharePipeline'
+      DistributionConfigurationArn:
+        'Fn::GetAtt':
+          - AmiShareDistributionConfig
+          - Arn
+      EnhancedImageMetadataEnabled: true
+      ImageRecipeArn:
+        'Fn::GetAtt':
+          - AmiShareImageRecipie
+          - Arn
+      ImageTestsConfiguration:
+        ImageTestsEnabled: true
+        TimeoutMinutes: 90
+      Status: ENABLED
+      Tags:
+        project: ec2-imagebuilder-ami-share
+    DependsOn:
+      - AmiShareInfrastructureConfig
+  AmiDistributionLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+        - 'Fn::Join':
+            - ''
+            - - 'arn:'
+              - Ref: 'AWS::Partition'
+              - ':iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+  AmiDistributionLambdaRoleDefaultPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'imagebuilder:UpdateDistributionConfiguration'
+            Effect: Allow
+            Resource:
+              'Fn::GetAtt':
+                - AmiShareDistributionConfig
+                - Arn
+          - Action:
+              - 'ssm:GetParameter'
+              - 'ssm:GetParameters'
+              - 'ssm:GetParametersByPath'
+            Effect: Allow
+            Resource:
+              'Fn::Join':
+                - ''
+                - - 'arn:aws:ssm:'
+                  - Ref: 'AWS::Region'
+                  - ':'
+                  - Ref: 'AWS::AccountId'
+                  - ':parameter/master-AmiSharing/*'
+        Version: '2012-10-17'
+      PolicyName: AmiDistributionLambdaRoleDefaultPolicy
+      Roles:
+        - Ref: AmiDistributionLambdaRole
+  AmiDistributionLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        ZipFile: |
+          ##################################################
+          ## EC2 ImageBuilder AMI distribution setting targetAccountIds
+          ## is not supported by CloudFormation (as of September 2021).
+          ## https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-imagebuilder-distributionconfiguration.html
+          ##
+          ## This lambda function uses Boto3 for EC2 ImageBuilder in order 
+          ## to set the AMI distribution settings which are currently missing from 
+          ## CloudFormation - specifically the targetAccountIds attribute
+          ## https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/imagebuilder.html
+          ##################################################
+
+          import os
+          import boto3
+          import botocore
+          import json
+          import logging
+          import cfnresponse
+
+          def get_ssm_parameter(ssm_param_name: str, aws_ssm_region: str):
+              ssm = boto3.client('ssm', region_name=aws_ssm_region)
+              parameter = ssm.get_parameter(Name=ssm_param_name, WithDecryption=False)
+              return parameter['Parameter']
+
+          def get_distributions_configurations(
+                  aws_distribution_regions, 
+                  ami_distribution_name,
+                  publishing_account_ids, 
+                  sharing_account_ids
+              ):
+
+              distribution_configs = []
+
+              for aws_region in aws_distribution_regions:
+                  distribution_config = {
+                      'region': aws_region,
+                      'amiDistributionConfiguration': {
+                          'name': ami_distribution_name,
+                          'description': f'AMI Distribution configuration for {ami_distribution_name}',
+                          'targetAccountIds': publishing_account_ids,
+                          'amiTags': {
+                              'PublishTargets': ",".join(publishing_account_ids),
+                              'SharingTargets': ",".join(sharing_account_ids)
+                          },
+                          'launchPermission': {
+                              'userIds': sharing_account_ids
+                          }
+                      }
+                  }
+
+                  distribution_configs.append(distribution_config)
+
+              return distribution_configs
+
+          def handler(event, context):
+              # set logging
+              logger = logging.getLogger()
+              logger.setLevel(logging.DEBUG)
+              
+              # print the event details
+              logger.debug(json.dumps(event, indent=2))
+
+              props = event['ResourceProperties']
+              aws_region = os.environ['AWS_REGION']
+              aws_distribution_regions = props['AwsDistributionRegions']
+              imagebuiler_name = props['ImageBuilderName']
+              ami_distribution_name = props['AmiDistributionName']
+              ami_distribution_arn = props['AmiDistributionArn']
+              ssm_publishing_account_ids_param_name = props['PublishingAccountIds']
+              ssm_sharing_account_ids_param_name = props['SharingAccountIds']
+
+              publishing_account_ids = get_ssm_parameter(ssm_publishing_account_ids_param_name, aws_region)['Value'].split(",")
+              sharing_account_ids = get_ssm_parameter(ssm_sharing_account_ids_param_name, aws_region)['Value'].split(",")
+
+              logger.info(publishing_account_ids)
+              logger.info(sharing_account_ids)
+
+              if event['RequestType'] != 'Delete':
+                  try:
+                      client = boto3.client('imagebuilder')
+                      response = client.update_distribution_configuration(
+                          distributionConfigurationArn=ami_distribution_arn,
+                          description=f"AMI Distribution settings for: {imagebuiler_name}",
+                          distributions=get_distributions_configurations(
+                              aws_distribution_regions=aws_distribution_regions,
+                              ami_distribution_name=ami_distribution_name,
+                              publishing_account_ids=publishing_account_ids,
+                              sharing_account_ids=sharing_account_ids
+                          )
+                      )
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  except botocore.exceptions.ClientError as err:
+                      logger.critical(err)
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {})
+              
+              # nothing to do on delete so send a success response
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+      Role:
+        'Fn::GetAtt':
+          - AmiDistributionLambdaRole
+          - Arn
+      Handler: index.handler
+      Runtime: python3.6
+      Timeout: 30
+    DependsOn:
+      - AmiDistributionLambdaRoleDefaultPolicy
+      - AmiDistributionLambdaRole
+  AmiPublishingTargetIds:
+    Type: 'AWS::SSM::Parameter'
+    Properties:
+      Type: StringList
+      Value:
+        Ref: AmiPublishingTargetIdsParameter
+      Name: /master-AmiSharing/AmiPublishingTargetIds
+  AmiSharingAccountIds:
+    Type: 'AWS::SSM::Parameter'
+    Properties:
+      Type: StringList
+      Value: 
+        Ref: AmiSharingAccountIdsParameter
+      Name: /master-AmiSharing/AmiSharingAccountIds
+  AmiDistributionCustomResource:
+    Type: 'AWS::CloudFormation::CustomResource'
+    Properties:
+      ServiceToken:
+        'Fn::GetAtt':
+          - AmiDistributionLambda
+          - Arn
+      AwsDistributionRegions: 
+        Ref: AmiPublishingRegionsParameter
+      ImageBuilderName: AmiDistributionConfig
+      AmiDistributionName: 'AmiShare-{{ imagebuilder:buildDate }}'
+      AmiDistributionArn:
+        'Fn::GetAtt':
+          - AmiShareDistributionConfig
+          - Arn
+      PublishingAccountIds:
+        Ref: AmiPublishingTargetIds
+      SharingAccountIds:
+        Ref: AmiSharingAccountIds
+    DependsOn:
+      - AmiShareDistributionConfig
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+Outputs:
+  ExportAmiShareSnsTopicArn:
+    Description: Ami Share Sns Topic
+    Value:
+      Ref: AmiShareDistributionTopic
+    Export:
+      Name: AmiShare-SnsTopicArn
+  ExportAmiShareKmsKeyArn:
+    Description: Ami Share KMS Key ARN
+    Value:
+      'Fn::GetAtt':
+        - AmiShareKmsKey
+        - Arn
+    Export:
+      Name: AmiShare-KmsKeyArn
+  ExportAmiSharePipelineArn:
+    Description: Ami Share Pipeline Arn
+    Value:
+      'Fn::GetAtt':
+        - AmiSharePipeline
+        - Arn
+    Export:
+      Name: AmiShare-PipelineArn

@@ -1,0 +1,49 @@
+{
+  "app": "python3 app.py",
+  "context": {
+    "@aws-cdk/aws-apigateway:usagePlanKeyOrderInsensitiveId": true,
+    "@aws-cdk/core:enableStackNameDuplicates": "true",
+    "aws-cdk:enableDiffNoFail": "true",
+    "@aws-cdk/core:stackRelativeExports": "true",
+    "@aws-cdk/aws-ecr-assets:dockerIgnoreSupport": true,
+    "@aws-cdk/aws-secretsmanager:parseOwnedSecretName": true,
+    "@aws-cdk/aws-kms:defaultKeyPolicies": true,
+    "@aws-cdk/aws-s3:grantWriteWithoutAcl": true,
+    "@aws-cdk/aws-ecs-patterns:removeDefaultDesiredCount": true,
+    "@aws-cdk/aws-rds:lowercaseDbIdentifier": true,
+    "@aws-cdk/aws-efs:defaultEncryptionAtRest": true,
+    "@aws-cdk/aws-lambda:recognizeVersionProps": true,
+    "@aws-cdk/aws-cloudfront:defaultSecurityPolicyTLSv1.2_2021": true
+  },
+  "projectSettings": {
+    "vpc": {
+      "vpc_id": "<<ADD_VPD_ID_HERE>>",
+      "subnet_id": "<<ADD_SUBNET_ID_HERE>>"
+    },
+    "imagebuilder": {
+      "baseImageArn": "amazon-linux-2-x86/2021.4.29",
+      "ebsVolumeSize": 8,
+      "instanceTypes": [
+        "t2.medium"
+      ],
+      "version": "1.0.0",
+      "imageBuilderEmailAddress": "email@domian.com",
+      "extraTags": {
+        "imagePipeline": "AMIBuilder"
+      },
+      "distributionList": [
+        "account1",
+        "account2"
+      ],
+      "amiPublishingRegions": [
+        "<<ADD_AMI_PUBLISHING_REGION_HERE>>"
+      ],
+      "amiPublishingTargetIds": [
+        "<<ADD_AMI_PUBLISHING_TARGET_ACCOUNT_IDS_HERE>>"
+      ],
+      "amiSharingIds": [
+        "<<ADD_AMI_SHARING_ACCOUNT_IDS_HERE>>"
+      ]
+    }
+  }
+}
