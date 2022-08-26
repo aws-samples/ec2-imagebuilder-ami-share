@@ -22,6 +22,8 @@ The project assumes the availability of at least 3 AWS accounts:
 
 The code will only deploy resources into the *tooling* account. The existence of the *publishing* and *sharing* accounts are required in order to set the respective EC2 Image Builder distribution configuration settings.
 
+Additonally, the project assumes that the account into which the CloudFormation template is deployed has an AWS VPC with at least 1 subnet.
+
 ----
 
 * [Solution architecture](#solution-architecture)
@@ -30,6 +32,7 @@ The code will only deploy resources into the *tooling* account. The existence of
 * [Deploying the CDK project](#deploying-the-cdk-project)
 * [Clean up the CDK project](#clean-up-the-cdk-project)
 * [Executing unit tests](#executing-unit-tests)
+* [Executing static code analysis tool](#executing-static-code-analysis-tool)
 * [Security](#security)
 * [License](#license)
 
@@ -45,159 +48,6 @@ The solution architecture discussed in this post is presented below:
 4. Upon successful completion of the Lambda function, CloudFormation will resume the creation of the remaining resources of the stack.
 
 # Deploying the CloudFormation project
-
-The relevant section of the [EC2ImageBuilderAmiShare.yaml](cloudformation/EC2ImageBuilderAmiShare.yaml) CloudFormation template, in which the Custom Resource and Lambda function are defined, is shown below:
-
-```
- AmiDistributionLambda:
-    Type: 'AWS::Lambda::Function'
-    Properties:
-      Code:
-        ZipFile: |
-          ##################################################
-          ## EC2 ImageBuilder AMI distribution setting targetAccountIds
-          ## is not supported by CloudFormation (as of September 2021).
-          ## https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-imagebuilder-distributionconfiguration.html
-          ##
-          ## This lambda function uses Boto3 for EC2 ImageBuilder in order 
-          ## to set the AMI distribution settings which are currently missing from 
-          ## CloudFormation - specifically the 'targetAccountIds' attribute
-          ## https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/imagebuilder.html
-          ##################################################
-
-          import os
-          import boto3
-          import botocore
-          import json
-          import logging
-          import cfnresponse
-
-          def get_ssm_parameter(ssm_param_name: str, aws_ssm_region: str):
-              ssm = boto3.client('ssm', region_name=aws_ssm_region)
-              parameter = ssm.get_parameter(Name=ssm_param_name, WithDecryption=False)
-              return parameter['Parameter']
-
-          def get_distributions_configurations(
-                  aws_distribution_regions, 
-                  ami_distribution_name,
-                  publishing_account_ids, 
-                  sharing_account_ids
-              ):
-
-              distribution_configs = []
-
-              for aws_region in aws_distribution_regions:
-                  distribution_config = {
-                      'region': aws_region,
-                      'amiDistributionConfiguration': {
-                          'name': ami_distribution_name,
-                          'description': f'AMI Distribution configuration for {ami_distribution_name}',
-                          'targetAccountIds': publishing_account_ids,
-                          'amiTags': {
-                              'PublishTargets': ",".join(publishing_account_ids),
-                              'SharingTargets': ",".join(sharing_account_ids)
-                          },
-                          'launchPermission': {
-                              'userIds': sharing_account_ids
-                          }
-                      }
-                  }
-
-                  distribution_configs.append(distribution_config)
-
-              return distribution_configs
-
-          def handler(event, context):
-              # set logging
-              logger = logging.getLogger()
-              logger.setLevel(logging.DEBUG)
-              
-              # print the event details
-              logger.debug(json.dumps(event, indent=2))
-
-              props = event['ResourceProperties']
-              aws_region = os.environ['AWS_REGION']
-              aws_distribution_regions = props['AwsDistributionRegions']
-              imagebuiler_name = props['ImageBuilderName']
-              ami_distribution_name = props['AmiDistributionName']
-              ami_distribution_arn = props['AmiDistributionArn']
-              ssm_publishing_account_ids_param_name = props['PublishingAccountIds']
-              ssm_sharing_account_ids_param_name = props['SharingAccountIds']
-
-              publishing_account_ids = get_ssm_parameter(ssm_publishing_account_ids_param_name, aws_region)['Value'].split(",")
-              sharing_account_ids = get_ssm_parameter(ssm_sharing_account_ids_param_name, aws_region)['Value'].split(",")
-
-              logger.info(publishing_account_ids)
-              logger.info(sharing_account_ids)
-
-              if event['RequestType'] != 'Delete':
-                  try:
-                      client = boto3.client('imagebuilder')
-                      response = client.update_distribution_configuration(
-                          distributionConfigurationArn=ami_distribution_arn,
-                          description=f"AMI Distribution settings for: {imagebuiler_name}",
-                          distributions=get_distributions_configurations(
-                              aws_distribution_regions=aws_distribution_regions,
-                              ami_distribution_name=ami_distribution_name,
-                              publishing_account_ids=publishing_account_ids,
-                              sharing_account_ids=sharing_account_ids
-                          )
-                      )
-                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-                  except botocore.exceptions.ClientError as err:
-                      logger.critical(err)
-                      cfnresponse.send(event, context, cfnresponse.FAILED, {})
-              
-              # nothing to do on delete so send a success response
-              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-      Role:
-        'Fn::GetAtt':
-          - AmiDistributionLambdaRole
-          - Arn
-      Handler: index.handler
-      Runtime: python3.6
-      Timeout: 30
-    DependsOn:
-      - AmiDistributionLambdaRoleDefaultPolicy
-      - AmiDistributionLambdaRole
-  AmiPublishingTargetIds:
-    Type: 'AWS::SSM::Parameter'
-    Properties:
-      Type: StringList
-      Value:
-        Ref: AmiPublishingTargetIdsParameter
-      Name: /master-AmiSharing/AmiPublishingTargetIds
-  AmiSharingAccountIds:
-    Type: 'AWS::SSM::Parameter'
-    Properties:
-      Type: StringList
-      Value: 
-        Ref: AmiSharingAccountIdsParameter
-      Name: /master-AmiSharing/AmiSharingAccountIds
-  AmiDistributionCustomResource:
-    Type: 'AWS::CloudFormation::CustomResource'
-    Properties:
-      ServiceToken:
-        'Fn::GetAtt':
-          - AmiDistributionLambda
-          - Arn
-      AwsDistributionRegions: 
-        Ref: AmiPublishingRegionsParameter
-      ImageBuilderName: AmiDistributionConfig
-      AmiDistributionName: 'AmiShare-{{ imagebuilder:buildDate }}'
-      AmiDistributionArn:
-        'Fn::GetAtt':
-          - AmiShareDistributionConfig
-          - Arn
-      PublishingAccountIds:
-        Ref: AmiPublishingTargetIds
-      SharingAccountIds:
-        Ref: AmiSharingAccountIds
-    DependsOn:
-      - AmiShareDistributionConfig
-    UpdateReplacePolicy: Delete
-    DeletionPolicy: Delete
-```
 
 Follow the steps below to deploy the CloudFormation template.
 
@@ -258,204 +108,10 @@ Delete the *EC2ImageBuilderAmiShare* CloudFormation stack.
 
 The project code uses the Python flavour of the AWS CDK ([Cloud Development Kit](https://aws.amazon.com/cdk/)). In order to execute the code, please ensure that you have fulfilled the [AWS CDK Prerequisites for Python](https://docs.aws.amazon.com/cdk/latest/guide/work-with-cdk-python.html).
 
-The relevant section of the CDK [ami_share.py](stacks/amishare/ami_share.py) stack, in which the Custom Resource and Lambda definition are defined, is shown below:
+Additionally, the project assumes:
 
-```
-# Create ami distribution lambda function - this is required because 
-# EC2 ImageBuilder AMI distribution setting targetAccountIds
-# is not supported by CloudFormation (as of September 2021).
-# see https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-imagebuilder-distributionconfiguration.html
-
-# Create a role for the amidistribution lambda function
-amidistribution_lambda_role = iam.Role(
-    scope=self,
-    id=f"amidistributionLambdaRole-{CdkUtils.stack_tag}",
-    assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
-    managed_policies=[
-        iam.ManagedPolicy.from_aws_managed_policy_name(
-            "service-role/AWSLambdaBasicExecutionRole"
-        )
-    ]
-)
-amidistribution_lambda_role.add_to_policy(
-    iam.PolicyStatement(
-        effect=iam.Effect.ALLOW,
-        resources=[ami_share_distribution_config.attr_arn],
-        actions=[
-            "imagebuilder:UpdateDistributionConfiguration"
-        ]
-    )
-)
-amidistribution_lambda_role.add_to_policy(
-    iam.PolicyStatement(
-        effect=iam.Effect.ALLOW,
-        resources=[f"arn:aws:ssm:{core.Aws.REGION}:{core.Aws.ACCOUNT_ID}:parameter/{CdkUtils.stack_tag}-AmiSharing/*"],
-        actions=[
-                "ssm:GetParameter",
-                "ssm:GetParameters",
-                "ssm:GetParametersByPath"
-        ]
-    )
-)
-
-# create the lambda that will use boto3 to set the 'targetAccountIds'
-# ami distribution setting currently not supported in Cloudformation
-ami_distribution_lambda = aws_lambda.Function(
-    scope=self,
-    id=f"amiDistributionLambda-{CdkUtils.stack_tag}",
-    code=aws_lambda.Code.asset("stacks/amishare/resources/amidistribution"),
-    handler="ami_distribution.lambda_handler",
-    runtime=aws_lambda.Runtime.PYTHON_3_6,
-    role=amidistribution_lambda_role
-)
-
-# Provider that invokes the ami distribution lambda function
-ami_distribution_provider = custom_resources.Provider(
-    self, 
-    f'AmiDistributionCustomResourceProvider-{CdkUtils.stack_tag}',
-    on_event_handler=ami_distribution_lambda
-)
-
-# Create a SSM Parameters for AMI Publishing and Sharing Ids
-# so as not to hardcode the account id values in the Lambda
-ssm_ami_publishing_target_ids = ssm.StringListParameter(
-    self, f"AmiPublishingTargetIds-{CdkUtils.stack_tag}",
-    parameter_name=f'/{CdkUtils.stack_tag}-AmiSharing/AmiPublishingTargetIds',
-    string_list_value=config['imagebuilder']['amiPublishingTargetIds']
-)
-
-ssm_ami_sharing_ids = ssm.StringListParameter(
-    self, f"AmiSharingAccountIds-{CdkUtils.stack_tag}",
-    parameter_name=f'/{CdkUtils.stack_tag}-AmiSharing/AmiSharingAccountIds',
-    string_list_value=config['imagebuilder']['amiSharingIds']
-)
-
-# The custom resource that uses the ami distribution provider to supply values
-ami_distribution_custom_resource = core.CustomResource(
-    self, 
-    f'AmiDistributionCustomResource-{CdkUtils.stack_tag}',
-    service_token=ami_distribution_provider.service_token,
-    properties = {
-        'CdkStackName': CdkUtils.stack_tag,
-        'AwsDistributionRegions': config['imagebuilder']['amiPublishingRegions'],
-        'ImageBuilderName': f'AmiDistributionConfig-{CdkUtils.stack_tag}',
-        'AmiDistributionName': f"AmiShare-{CdkUtils.stack_tag}" + "-{{ imagebuilder:buildDate }}",
-        'AmiDistributionArn': ami_share_distribution_config.attr_arn,
-        'PublishingAccountIds': ssm_ami_publishing_target_ids.parameter_name,
-        'SharingAccountIds': ssm_ami_sharing_ids.parameter_name
-    }
-)
-
-ami_distribution_custom_resource.node.add_dependency(ami_share_distribution_config)
-
-# The result obtained from the output of custom resource
-ami_distriubtion_arn = core.CustomResource.get_att_string(ami_distribution_custom_resource, attribute_name='AmiDistributionArn')
-```
-
-The [ami_distribution.py](stacks/amishare/resources/amidistribution/ami_distribution.py) Lambda function, called by the Custom Resource, is shown below:
-
-```
-##################################################
-## EC2 ImageBuilder AMI distribution setting targetAccountIds
-## is not supported by CloudFormation (as of September 2021).
-## https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-imagebuilder-distributionconfiguration.html
-##
-## This lambda function uses Boto3 for EC2 ImageBuilder in order 
-## to set the AMI distribution settings which are currently missing from 
-## CloudFormation - specifically the targetAccountIds attribute
-## https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/imagebuilder.html
-##################################################
-
-import os
-import boto3
-import botocore
-import json
-import logging
-
-def get_ssm_parameter(ssm_param_name: str, aws_ssm_region: str):
-    ssm = boto3.client('ssm', region_name=aws_ssm_region)
-    parameter = ssm.get_parameter(Name=ssm_param_name, WithDecryption=False)
-    return parameter['Parameter']
-
-def get_distributions_configurations(
-        aws_distribution_regions, 
-        ami_distribution_name,
-        publishing_account_ids, 
-        sharing_account_ids
-    ):
-
-    distribution_configs = []
-
-    for aws_region in aws_distribution_regions:
-        distribution_config = {
-            'region': aws_region,
-            'amiDistributionConfiguration': {
-                'name': ami_distribution_name,
-                'description': f'AMI Distribution configuration for {ami_distribution_name}',
-                'targetAccountIds': publishing_account_ids,
-                'amiTags': {
-                    'PublishTargets': ",".join(publishing_account_ids),
-                    'SharingTargets': ",".join(sharing_account_ids)
-                },
-                'launchPermission': {
-                    'userIds': sharing_account_ids
-                }
-            }
-        }
-
-        distribution_configs.append(distribution_config)
-
-    return distribution_configs
-
-def lambda_handler(event, context):
-    # set logging
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-    
-    # print the event details
-    logger.debug(json.dumps(event, indent=2))
-
-    props = event['ResourceProperties']
-    cdk_stack_name = props['CdkStackName']
-    aws_region = os.environ['AWS_REGION']
-    aws_distribution_regions = props['AwsDistributionRegions']
-    imagebuiler_name = props['ImageBuilderName']
-    ami_distribution_name = props['AmiDistributionName']
-    ami_distribution_arn = props['AmiDistributionArn']
-    ssm_publishing_account_ids_param_name = props['PublishingAccountIds']
-    ssm_sharing_account_ids_param_name = props['SharingAccountIds']
-
-    publishing_account_ids = get_ssm_parameter(ssm_publishing_account_ids_param_name, aws_region)['Value'].split(",")
-    sharing_account_ids = get_ssm_parameter(ssm_sharing_account_ids_param_name, aws_region)['Value'].split(",")
-
-    logger.info(publishing_account_ids)
-    logger.info(sharing_account_ids)
-
-    if event['RequestType'] != 'Delete':
-        try:
-            client = boto3.client('imagebuilder')
-            response = client.update_distribution_configuration(
-                distributionConfigurationArn=ami_distribution_arn,
-                description=f"AMI Distribution settings for: {imagebuiler_name}",
-                distributions=get_distributions_configurations(
-                    aws_distribution_regions=aws_distribution_regions,
-                    ami_distribution_name=ami_distribution_name,
-                    publishing_account_ids=publishing_account_ids,
-                    sharing_account_ids=sharing_account_ids
-                )
-            )
-        except botocore.exceptions.ClientError as err:
-            raise err
-
-    output = {
-        'PhysicalResourceId': f"ami-distribution-id-{cdk_stack_name}",
-        'Data': {
-            'AmiDistributionArn': ami_distribution_arn
-        }
-    }
-    logger.info("Output: " + json.dumps(output))
-    return output
-```
+* configuration of [AWS CLI Environment Variables](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html).
+* the availability of a `bash` (or compatible) shell environment.
 
 The project requires that the AWS account is [bootstrapped](https://docs.aws.amazon.com/de_de/cdk/latest/guide/bootstrapping.html) in order to allow the deployment of the CDK stack.
 
@@ -602,6 +258,45 @@ python3 -m venv .venv
 source .venv/bin/activate
 cdk synth && python -m pytest -v -c ./tests/pytest.ini
 ```
+
+# Executing static code analysis tool
+
+The solution includes [Checkov](https://github.com/bridgecrewio/checkov) which is a static code analysis tool for infrastructure as code (IaC).
+
+The static code analysis tool for the project can be executed via the commands below:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+rm -fr cdk.out && cdk synth && checkov --config-file checkov.yaml
+```
+
+**NOTE:** The Checkov tool has been configured to skip certain checks.
+
+The Checkov configuration file, [checkov.yaml](checkov.yaml), contains a section named `skip-check`.
+
+```
+skip-check:
+   - CKV_AWS_7     # Ensure rotation for customer created CMKs is enabled
+   - CKV_AWS_23    # Ensure every security groups rule has a description
+   - CKV_AWS_24    # Ensure no security groups allow ingress from 0.0.0.0:0 to port 22
+   - CKV_AWS_25    # Ensure no security groups allow ingress from 0.0.0.0:0 to port 3389
+   - CKV_AWS_26    # Ensure all data stored in the SNS topic is encrypted
+   - CKV_AWS_33    # Ensure KMS key policy does not contain wildcard (*) principal
+   - CKV_AWS_40    # Ensure IAM policies are attached only to groups or roles (Reducing access management complexity may in-turn reduce opportunity for a principal to inadvertently receive or retain excessive privileges.)
+   - CKV_AWS_45    # Ensure no hard-coded secrets exist in lambda environment
+   - CKV_AWS_60    # Ensure IAM role allows only specific services or principals to assume it
+   - CKV_AWS_61    # Ensure IAM role allows only specific principals in account to assume it
+   - CKV_AWS_107   # Ensure IAM policies does not allow credentials exposure
+   - CKV_AWS_108   # Ensure IAM policies does not allow data exfiltration
+   - CKV_AWS_109   # Ensure IAM policies does not allow permissions management without constraints
+   - CKV_AWS_110   # Ensure IAM policies does not allow privilege escalation
+   - CKV_AWS_111   # Ensure IAM policies does not allow write access without constraints
+```
+
+These checks represent best practices in AWS and should be enabled (or at the very least the security risk of not enabling the checks should be accepted and understood) for production systems. 
+
+In the context of this solution, these specific checks have not been remediated in order to focus on the core elements of the solution.
 
 # Security
 

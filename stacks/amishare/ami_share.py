@@ -1,19 +1,27 @@
-from aws_cdk import (
-    core,
-    aws_imagebuilder as imagebuilder,
-    aws_iam as iam,
-    aws_sns as sns,
-    aws_ec2 as ec2,
-    aws_ssm as ssm,
-    aws_kms as kms,
-    aws_lambda,
-    custom_resources
-)
+#!/usr/bin/env python
 
+"""
+    ami_share.py:
+    CDK Stack that creates and deploys the infrastructure
+    required for the ec2-imagebuilder-ami-share project.
+"""
+
+from aws_cdk import aws_ec2 as ec2
+from aws_cdk import aws_iam as iam
+from aws_cdk import aws_imagebuilder as imagebuilder
+from aws_cdk import aws_kms as kms
+from aws_cdk import aws_lambda
+from aws_cdk import aws_sns as sns
+from aws_cdk import aws_ssm as ssm
+from aws_cdk import core, custom_resources
 from utils.CdkUtils import CdkUtils
 
 
 class AmiShareStack(core.Stack):
+    """
+        CDK Stack that creates and deploys the infrastructure
+        required for the ec2-imagebuilder-ami-share project.
+    """
 
     def __init__(self, scope: core.Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
