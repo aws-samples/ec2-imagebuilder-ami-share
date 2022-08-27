@@ -22,7 +22,7 @@ The project assumes the availability of at least 3 AWS accounts:
 
 The code will only deploy resources into the *tooling* account. The existence of the *publishing* and *sharing* accounts are required in order to set the respective EC2 Image Builder distribution configuration settings.
 
-Additonally, the project assumes that the account into which the CloudFormation template is deployed has an AWS VPC with at least 1 subnet.
+Additionally, the project assumes that the account into which the CloudFormation template is deployed has an AWS VPC with at least 1 subnet.
 
 ----
 
@@ -115,7 +115,7 @@ Additionally, the project assumes:
 
 The project requires that the AWS account is [bootstrapped](https://docs.aws.amazon.com/de_de/cdk/latest/guide/bootstrapping.html) in order to allow the deployment of the CDK stack.
 
-```
+```bash
 # navigate to project directory
 cd ec2-imagebuilder-ami-share
 
