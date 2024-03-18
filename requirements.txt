@@ -32,7 +32,7 @@ cdk-expects-matcher==0.1.2
 constructs==3.3.161
 expects==0.9.0
 gitdb==4.0.7
-GitPython==3.1.37
+GitPython==3.1.41
 iniconfig==1.1.1
 jsii==1.38.0
 packaging==21.0
